@@ -1,0 +1,171 @@
+###############################################################################
+# Example Terraform Variables Configuration
+# Copy this file to terraform.tfvars and update with your values
+###############################################################################
+
+###############################################################################
+# General Configuration
+###############################################################################
+
+# AWS region for all resources
+region = "us-east-1"
+
+# Environment name (dev, staging, prod)
+environment = "staging"
+
+# Project name used for resource naming and tagging
+project_name = "nginx-ecs-app"
+
+###############################################################################
+# VPC Configuration
+###############################################################################
+
+# VPC CIDR block (provides 65,536 IP addresses)
+vpc_cidr = "10.0.0.0/16"
+
+# Number of Availability Zones (2 or 3 for high availability)
+az_count = 2
+
+# Public subnet CIDRs (for ALB)
+public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+
+# Private subnet CIDRs (for ECS tasks)
+private_subnet_cidrs = ["10.0.10.0/24", "10.0.11.0/24"]
+
+# Use single NAT Gateway (true = cost optimization, false = high availability)
+single_nat_gateway = true
+
+# Enable VPC Flow Logs (adds ~$1-2/month)
+enable_vpc_flow_logs = false
+
+###############################################################################
+# ECS Task Configuration
+###############################################################################
+
+# CPU units (256 = 0.25 vCPU, 512 = 0.5 vCPU, 1024 = 1 vCPU)
+task_cpu = "256"
+
+# Memory in MB (must be compatible with CPU selection)
+# Valid combinations: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-cpu-memory-error.html
+task_memory = "512"
+
+# Container name
+container_name = "nginx"
+
+# Container port to expose
+container_port = 80
+
+# Docker image tag to deploy
+image_tag = "latest"
+
+# Environment variables for the container
+# container_environment = [
+#   {
+#     name  = "ENVIRONMENT"
+#     value = "staging"
+#   },
+#   {
+#     name  = "LOG_LEVEL"
+#     value = "info"
+#   }
+# ]
+container_environment = []
+
+# Desired number of ECS tasks (when services are running)
+desired_count = 2
+
+# Enable ECS Exec for container debugging (aws ecs execute-command)
+enable_ecs_exec = false
+
+# Enable CloudWatch Container Insights (adds ~$3-5/month)
+enable_container_insights = false
+
+###############################################################################
+# Fargate Capacity Provider Strategy
+###############################################################################
+
+# Fargate On-Demand weight (percentage)
+fargate_weight = 30
+
+# Base number of tasks that must run on Fargate On-Demand
+fargate_base = 1
+
+# Fargate Spot weight (percentage)
+fargate_spot_weight = 70
+
+# Example configurations:
+# Cost-optimized: fargate_weight=30, fargate_spot_weight=70
+# Balanced: fargate_weight=50, fargate_spot_weight=50
+# Reliable: fargate_weight=100, fargate_spot_weight=0
+
+###############################################################################
+# Auto Scaling Configuration
+###############################################################################
+
+# Minimum number of tasks (1 for max cost savings)
+min_capacity = 1
+
+# Maximum number of tasks (cap for cost control)
+max_capacity = 4
+
+# Target CPU utilization percentage for scaling
+cpu_target_value = 70
+
+# Target memory utilization percentage for scaling
+memory_target_value = 80
+
+# Cooldown after scaling in (seconds)
+scale_in_cooldown = 300  # 5 minutes
+
+# Cooldown after scaling out (seconds)
+scale_out_cooldown = 60  # 1 minute
+
+###############################################################################
+# ALB Configuration
+###############################################################################
+
+# Health check path
+health_check_path = "/"
+
+# Enable deletion protection (set to true for production)
+enable_deletion_protection = false
+
+###############################################################################
+# ECR Configuration
+###############################################################################
+
+# Scan images for vulnerabilities on push
+ecr_scan_on_push = true
+
+# Number of images to keep (older images are deleted)
+ecr_image_count = 10
+
+###############################################################################
+# CloudWatch Logs Configuration
+###############################################################################
+
+# Log retention in days (shorter = lower cost)
+# Valid values: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653
+log_retention_days = 7
+
+###############################################################################
+# Scheduler Configuration
+###############################################################################
+
+# Cron expression for stopping ECS services (UTC timezone)
+# Format: cron(minutes hours day-of-month month day-of-week year)
+# Example: "cron(0 22 * * ? *)" = Every day at 10:00 PM UTC
+stop_schedule = "cron(0 22 * * ? *)"
+
+# Cron expression for starting ECS services (UTC timezone)
+# Example: "cron(0 6 ? * MON-FRI *)" = Weekdays at 6:00 AM UTC
+start_schedule = "cron(0 6 ? * MON-FRI *)"
+
+# Common schedule examples:
+# Daily 10 PM UTC: "cron(0 22 * * ? *)"
+# Weekdays 6 AM UTC: "cron(0 6 ? * MON-FRI *)"
+# Weekends only: "cron(0 8 ? * SAT-SUN *)"
+# Business hours (8 AM): "cron(0 8 * * ? *)"
+# Note: EventBridge uses UTC. Convert to your timezone:
+#   - EST: UTC-5 (UTC 22:00 = EST 5:00 PM)
+#   - PST: UTC-8 (UTC 22:00 = PST 2:00 PM)
