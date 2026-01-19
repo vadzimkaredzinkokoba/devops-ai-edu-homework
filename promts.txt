@@ -1,0 +1,316 @@
+# Prompts for DevOps AI Education Final Project
+
+## Overview
+
+4 prompts for deploying a containerized application (nginx on port 80) as a test app in AWS.
+
+---
+
+## Task 1: Architecture Design
+
+Design a temporary staging environment in AWS for a small containerized service, keeping it reliable and low cost.
+
+Manager email for context:
+> Subject: Quick staging environment for a simple service
+>
+> Hi team,
+> We need to quickly stand up a temporary staging environment for a small service. It must be highly available and support horizontal scaling. Keep costs low (use free tier where possible) and implement an automatic stop during nights to save money. This is for short-lived testing and should be easy to tear down.
+>
+> Please provision infrastructure in AWS and add a CI/CD pipeline that can deploy updates. Prioritize reliability and low cost.
+>
+> Thanks,
+> Manager
+
+Application details:
+- Containerized app (e.g., nginx)
+- Exposes port 80
+- Deployed as Docker containers
+- Images stored in a container registry
+
+Business requirements:
+- Temporary staging environment for a small containerized service
+- High availability
+- Horizontal scaling support
+- Cost minimization (use free tier where possible)
+- Automatic shutdown at night
+- Easy teardown
+- AWS hosting
+- CI/CD for container updates
+- Priorities: reliability and low cost
+
+Tasks:
+1. Create an architecture diagram in Mermaid in a separate file; keep text readable and avoid overlaps.
+2. Write a document justifying tool and technology choices.
+3. List all Terraform parameters (instance types, counts, storage sizes, container configs, etc.).
+4. Produce a cost estimate based on the selected parameters.
+
+Architecture requirements:
+- Prefer ECS over EKS for cost in staging.
+- Consider ECS Fargate Spot or ECS on EC2 (t3.micro/t3.small) for savings.
+- Use ALB to route traffic to containers on port 80.
+- Store Docker images in ECR.
+- Run across at least two AZs for availability.
+- Enable horizontal scaling (ECS Service Auto Scaling with target tracking).
+- Add nighttime shutdown (EventBridge + Lambda to stop ECS services/tasks).
+- Use a VPC with public and private subnets (containers in private, ALB in public).
+- Stay within free tier where possible; design for easy removal.
+
+Recommended AWS services:
+- ECS (orchestration)
+- ECR (image storage)
+- ALB (routing on port 80)
+- VPC (network isolation)
+- Fargate Spot or EC2 (t3.micro/t3.small) for compute
+- EventBridge + Lambda (night shutdown automation)
+- CloudWatch (monitoring/logging)
+- IAM (access control)
+- S3 (Terraform state) with versioning for recovery
+
+Terraform state management:
+- Use S3 backend for remote state (https://developer.hashicorp.com/terraform/language/backend/s3).
+- Create the bucket before terraform init (bootstrap step).
+- Enable versioning for recovery and use S3 lockfile (use_lockfile = true).
+- Grant only required IAM permissions.
+- Support multiple workspaces for environments.
+
+Terraform implementation strategy:
+- Use terraform-aws-modules (https://github.com/terraform-aws-modules):
+  * terraform-aws-modules/vpc/aws for VPC
+  * terraform-aws-modules/ecs/aws for ECS cluster and services
+  * terraform-aws-modules/iam/aws for IAM roles and policies
+  * terraform-aws-modules/lambda/aws for Lambda functions
+- Community modules speed delivery and align with best practices.
+
+Expected outputs:
+- Mermaid architecture diagram showing VPC, subnets, ALB, ECS cluster, ECS services, ECR, Lambda scheduler, CloudWatch, and S3 for state.
+- Document explaining component choices (e.g., ECS vs. EKS, Fargate Spot vs. EC2).
+- Table of Terraform parameters and defaults covering:
+  * S3 backend config (bucket name, key, region, use_lockfile, workspace_key_prefix)
+  * Bootstrap S3 bucket settings (name, versioning, encryption, public access blocking)
+  * VPC module parameters (terraform-aws-modules/vpc/aws)
+  * ECS module parameters (terraform-aws-modules/ecs/aws)
+  * ECS cluster config
+  * ECS service config (desired count, task definition)
+  * Container config (image, port 80, CPU, memory)
+  * ALB config (listeners, target groups)
+  * Auto Scaling config (min/max/desired tasks)
+  * ECR repository config
+  * Lambda scheduler parameters (terraform-aws-modules/lambda/aws)
+  * IAM module parameters (terraform-aws-modules/iam/aws)
+  * IAM permissions for S3 backend access
+- Cost estimate with service-level breakdown and savings from nighttime shutdown.
+
+---
+
+## Task 2: Infrastructure as Code (Terraform)
+
+Create complete Terraform IaC for the containerized application using the Task 1 architecture.
+
+Application context:
+- Containerized app (nginx) on port 80
+- Images in ECR
+- Deployed on ECS
+
+Code requirements:
+0. Use current Terraform, providers, and module versions from official docs.
+1. Use community terraform-aws-modules:
+   - terraform-aws-modules/vpc/aws for VPC (subnets, IGW, NAT, routes)
+   - terraform-aws-modules/ecs/aws for ECS cluster and services
+   - terraform-aws-modules/alb/aws or native aws_lb resources following module patterns
+   - terraform-aws-modules/iam/aws for IAM roles and policies
+   - terraform-aws-modules/lambda/aws for scheduler Lambdas
+   - aws_ecr_repository for ECR
+   - aws_appautoscaling_target and aws_appautoscaling_policy for ECS autoscaling
+   - Separate environments (dev/staging/prod)
+   - Module source format:
+     module "vpc" {
+       source  = "terraform-aws-modules/vpc/aws"
+       version = "~> 5.0"
+       # variables
+     }
+
+2. State management (S3 backend):
+   - Configure S3 backend for state; create bucket before terraform init.
+   - Follow https://developer.hashicorp.com/terraform/language/backend/s3.
+   - Requirements: bucket name via variable, key path (e.g., environments/staging/terraform.tfstate), region, use_lockfile = true, versioning enabled, workspace_key_prefix for workspaces.
+   - Example:
+     terraform {
+       backend "s3" {
+         bucket       = "my-terraform-state-bucket"
+         key          = "environments/staging/terraform.tfstate"
+         region       = "us-east-1"
+         use_lockfile = true
+       }
+     }
+   - Bootstrap bucket: unique name, versioning, encryption (SSE-S3 or SSE-KMS), least-privilege policy, block public access, optional logging.
+   - IAM for backend: s3:ListBucket (with prefix), s3:GetObject/s3:PutObject on state path, s3:GetObject/s3:PutObject/s3:DeleteObject on lock file, workspace permissions as needed.
+   - DynamoDB locking is deprecated; rely on S3 lockfile.
+
+3. Best practices:
+   - Tags: Name, Environment, Project, ManagedBy.
+   - Least-privilege IAM policies.
+   - Use data sources where helpful.
+   - Validate variables.
+   - Add concise comments for architectural decisions.
+
+4. Functional requirements:
+   - High availability (minimum two AZs).
+   - ECS cluster on Fargate Spot or EC2.
+   - ECS service with task definition: ECR image, port 80 mapping, cost-optimized CPU/memory, health checks.
+   - ECS Service Auto Scaling with target tracking.
+   - ALB: HTTP listener on 80, target group to ECS on port 80, health checks.
+   - Nighttime shutdown: EventBridge rules (e.g., 22:00 and 08:00 UTC) invoking Lambda to stop/start or scale to 0.
+   - Security: minimal SG rules (port 80 from ALB, port 443 if HTTPS), containers in private subnets, ALB in public, no direct internet for containers.
+   - ECR repository for images.
+   - Prefer free tier where applicable (e.g., t3.micro for EC2 launch type).
+
+5. Project structure:
+   terraform/
+   ├── bootstrap/
+   │   ├── main.tf (create S3 bucket for state, enable versioning)
+   │   ├── variables.tf
+   │   ├── outputs.tf (bucket name output)
+   │   └── README.md (bootstrap steps)
+   ├── environments/
+   │   ├── staging/
+   │   │   ├── main.tf (uses terraform-aws-modules)
+   │   │   ├── variables.tf
+   │   │   ├── terraform.tfvars
+   │   │   └── backend.tf (S3 backend config)
+   │   └── dev/
+   ├── main.tf (root orchestration)
+   ├── variables.tf
+   ├── outputs.tf
+   ├── versions.tf (Terraform and provider versions)
+   └── README.md
+
+   Bootstrap directory:
+   - Run first to create the S3 state bucket with versioning and encryption; block public access; output bucket name.
+   - Can use local backend or minimal S3 backend for bootstrap.
+
+   Backend configuration (backend.tf per environment):
+   - Reference bootstrap bucket name.
+   - Set environment-specific key path.
+   - Enable use_lockfile = true.
+   - Configure workspace_key_prefix if using workspaces.
+   - Use partial backend config for sensitive values (e.g., pass bucket via -backend-config).
+
+   Module usage:
+   - module "vpc" (terraform-aws-modules/vpc/aws)
+   - module "ecs" (terraform-aws-modules/ecs/aws)
+   - module "iam" (terraform-aws-modules/iam/aws)
+   - module "lambda" (terraform-aws-modules/lambda/aws)
+   - Native resources for ECR, ALB, ECS autoscaling where no module fits.
+
+6. Key Terraform resources/modules:
+   - terraform-aws-modules: vpc, ecs (cluster/service/task), iam (task roles, Lambda execution), lambda (scheduler functions).
+   - Native: aws_ecr_repository, aws_lb, aws_lb_target_group, aws_lb_listener, aws_appautoscaling_target, aws_appautoscaling_policy, aws_cloudwatch_event_rule, aws_cloudwatch_event_target.
+   - Consult https://github.com/terraform-aws-modules for versions, inputs, outputs, and best practices.
+
+7. Documentation:
+   - README with: bootstrap steps for S3 state bucket; backend configuration; terraform init with backend-config; Docker build/push to ECR; deploying infrastructure; updating image; scheduler behavior; state management and workspaces.
+   - terraform.tfvars.example with commented samples.
+   - bootstrap/README.md with bootstrap instructions.
+   - Module descriptions and backend configuration examples.
+
+Deliverable: production-ready Terraform that exposes the container via ALB on port 80.
+
+Important reminders:
+- Bootstrap the S3 state bucket before terraform init.
+- Follow S3 backend docs; use use_lockfile = true.
+- Enable bucket versioning for state recovery.
+- Favor terraform-aws-modules with pinned versions (e.g., ~> 5.0).
+- Use module outputs to wire components and follow module conventions.
+- Keep sensitive backend values out of source (use -backend-config or a backend file).
+
+---
+
+## Task 3: CI/CD Pipeline
+
+Create a GitHub Actions pipeline for Terraform and the container image.
+
+Application context:
+- Containerized app (nginx) on port 80
+- Images in ECR
+- Infrastructure managed with Terraform
+- ECS service updated with new images
+
+Pipeline requirements:
+1. Infrastructure (Terraform):
+   - terraform plan on PRs.
+   - terraform apply on non-main branches to staging.
+   - Use GitHub Actions.
+   - Handle S3 backend: bucket/key/region/use_lockfile, terraform init with -backend-config, state locking, AWS creds for backend.
+
+2. Application (Docker):
+   - Build image on code changes.
+   - Push image to ECR.
+   - Update ECS service with new image (via Terraform or AWS CLI).
+   - Tag images with git commit SHA or tag.
+
+3. Security:
+   - Store AWS credentials in GitHub Secrets (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY).
+   - Store backend details in Secrets (S3_BUCKET_NAME, AWS_REGION).
+   - Authenticate to ECR with AWS credentials.
+   - Ensure IAM allows S3 backend access (s3:ListBucket, s3:GetObject, s3:PutObject on state and lock).
+   - Review plan before apply; use approvals or environment protection.
+   - Optional image scanning (Trivy, Snyk).
+
+4. Optional enhancements:
+   - tfsec or checkov for Terraform security.
+   - terraform validate and fmt checks.
+   - Docker vulnerability scanning.
+   - Notifications (GitHub Actions, Slack/email webhooks).
+   - Rollback strategy for failed deploys.
+
+5. Workflow structure:
+   - Separate jobs: terraform plan (PR), docker build/push (on merge), terraform apply (on merge), ECS service update (on merge if not via Terraform).
+   - Include error handling, logging, and artifacts.
+   - Cache providers and Docker layers.
+
+6. Files and secrets:
+   - Add .github/workflows/deploy.yml (or terraform.yml and docker.yml).
+   - Comment steps for clarity.
+   - Document required secrets: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, TF_STATE_BUCKET, ECR_REPOSITORY (optional if derived).
+   - Handle backend config via -backend-config or a backend file; ensure S3 bucket exists (bootstrap).
+   - Note Dockerfile location if relevant.
+
+7. ECS service update options:
+   - Update task definition via Terraform (image tag in terraform.tfvars).
+   - Or use AWS CLI to force a new deployment after image push.
+   - Keep deployments zero-downtime (ECS rolling update).
+
+Deliverable: a complete GitHub Actions workflow covering infra and app changes with reliable, secure practices.
+
+---
+
+## Task 4: Optimization, Security, and Cost Improvements
+
+Analyze and improve existing Terraform code for optimization, security, and cost.
+
+[Insert link to current Terraform code or describe the infrastructure.]
+
+Tasks:
+1. Code optimization:
+   - Review Terraform quality and use of terraform-aws-modules (https://github.com/terraform-aws-modules).
+   - Confirm current module versions and proper feature use; replace custom code with modules when helpful.
+   - Improve structure for DRY and reuse; streamline dependencies; enhance readability and maintainability; remove unused variables and add sensible defaults.
+
+2. Security hardening:
+   - Audit for security gaps.
+   - Fix issues: overly open security groups, over-privileged IAM roles/policies, weak ECR/S3 settings, missing encryption (ECS, ALB), public exposure, missing VPC flow logs, unrestricted ECR pulls.
+   - Apply best practices: least-privilege IAM for ECS and Lambda, encryption in transit/at rest (HTTPS ALB, ECS task encryption), VPC endpoints for private access (ECR, ECS, CloudWatch), CloudTrail, GuardDuty (optional), ECR image scanning, keep containers in private subnets.
+
+3. Cost optimization:
+   - Start from the Task 1 cost estimate.
+   - Propose savings: Fargate Spot where viable; right-size ECS CPU/memory; smaller EC2 types if used; ALB tuning (single AZ if acceptable for staging); remove unused resources; ECR lifecycle policies; better night shutdown (scale to 0); consider single-AZ NAT for staging.
+   - Estimate savings per improvement.
+
+Output format:
+1. Improved Terraform code with brief comments explaining changes.
+2. Improvement report (Markdown): code optimization, fixed security issues, applied best practices.
+3. Cost optimization report: compare to Task 1 estimate, detail improvements, per-item savings, final projected savings.
+
+Deliver all three components.
+
+---
