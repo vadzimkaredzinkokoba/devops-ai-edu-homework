@@ -165,6 +165,8 @@ jobs:
       - name: Update Image Tag
         run: |
           cd terraform/environments/${{ env.ENVIRONMENT }}
+          ls -lah
+          pwd
           # Update terraform.tfvars with new image tag
           sed -i 's/image_tag = .*/image_tag = "${{ github.sha }}"/' terraform.tfvars
 
@@ -254,7 +256,7 @@ jobs:
         id: alb
         run: |
           ALB_URL=$(aws elbv2 describe-load-balancers \
-            --query "LoadBalancers[?contains(LoadBalancerName, 'nginx-ecs-staging')].DNSName" \
+            --query "LoadBalancers[?contains(LoadBalancerName, 'nginx-ecs-app-staging-alb')].DNSName" \
             --output text | head -n1)
           echo "url=http://$ALB_URL" >> $GITHUB_OUTPUT
 
@@ -284,7 +286,7 @@ jobs:
         if: failure()
         run: |
           TG_ARN=$(aws elbv2 describe-target-groups \
-            --query "TargetGroups[?contains(TargetGroupName, 'nginx-ecs-staging')].TargetGroupArn" \
+            --query "TargetGroups[?contains(TargetGroupName, 'nginx-ecs-app-staging-alb')].TargetGroupArn" \
             --output text)
           
           echo "Target Group Health:"
