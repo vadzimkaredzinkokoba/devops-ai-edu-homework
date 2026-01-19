@@ -186,25 +186,21 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="use_lockfile=true"
 
-      - name: Update Image Tag
-        run: |
-          cd terraform/environments/${{ env.ENVIRONMENT }}
-          echo "Using image tag: ${{ github.sha }}"
-          # Update terraform.tfvars with new image tag
-          sed -i 's/image_tag = .*/image_tag = "${{ github.sha }}"/' terraform.tfvars
-          cat terraform.tfvars | grep image_tag
-
       - name: Terraform Plan
         id: plan
         run: |
           cd terraform/environments/${{ env.ENVIRONMENT }}
-          terraform plan -out=tfplan
+          terraform plan \
+            -var="image_tag=${{ github.sha }}" \
+            -out=tfplan
 
       - name: Terraform Apply
         id: apply
         run: |
           cd terraform/environments/${{ env.ENVIRONMENT }}
-          terraform apply -auto-approve tfplan
+          terraform apply \
+            -var="image_tag=${{ github.sha }}" \
+            -auto-approve tfplan
 
       - name: Get Outputs
         id: outputs
