@@ -1,0 +1,302 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging
+    paths:
+      - 'terraform/**'
+      - 'Dockerfile'
+      - '.github/workflows/deploy-*.yml'
+  workflow_dispatch:
+    inputs:
+      skip_terraform:
+        description: 'Skip Terraform apply'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  TF_VERSION: '1.9.0'
+  ENVIRONMENT: staging
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Get ECR Repository
+        id: ecr-repo
+        run: |
+          ECR_REPO=$(aws ecr describe-repositories \
+            --query "repositories[?contains(repositoryName, 'nginx-ecs-staging')].repositoryUri" \
+            --output text | head -n1)
+          echo "repository=$ECR_REPO" >> $GITHUB_OUTPUT
+          echo "ECR Repository: $ECR_REPO"
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.ecr-repo.outputs.repository }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.ecr-repo.outputs.repository }}:${{ github.sha }}
+            ${{ steps.ecr-repo.outputs.repository }}:staging-latest
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+          platforms: linux/amd64
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.ecr-repo.outputs.repository }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+  terraform-apply:
+    name: Apply Terraform
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: ${{ !inputs.skip_terraform }}
+    environment:
+      name: staging
+      url: ${{ steps.outputs.outputs.alb_url }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cache Terraform Providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            terraform/environments/${{ env.ENVIRONMENT }}/.terraform
+          key: ${{ runner.os }}-terraform-${{ hashFiles('terraform/environments/${{ env.ENVIRONMENT }}/.terraform.lock.hcl') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
+      - name: Terraform Init
+        run: |
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=environments/${{ env.ENVIRONMENT }}/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="use_lockfile=true"
+
+      - name: Update Image Tag
+        run: |
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          # Update terraform.tfvars with new image tag
+          sed -i 's/image_tag = .*/image_tag = "${{ github.sha }}"/' terraform.tfvars
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          terraform apply -auto-approve tfplan
+
+      - name: Get Outputs
+        id: outputs
+        run: |
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          ALB_URL=$(terraform output -raw application_url)
+          echo "alb_url=$ALB_URL" >> $GITHUB_OUTPUT
+          echo "Application URL: $ALB_URL"
+
+      - name: Save Terraform Outputs
+        run: |
+          cd terraform/environments/${{ env.ENVIRONMENT }}
+          terraform output -json > terraform-outputs.json
+
+      - name: Upload Terraform Outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs
+          path: terraform/environments/${{ env.ENVIRONMENT }}/terraform-outputs.json
+
+  update-ecs-service:
+    name: Update ECS Service
+    runs-on: ubuntu-latest
+    needs: [build-and-push, terraform-apply]
+    if: ${{ inputs.skip_terraform }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECS Service Details
+        id: ecs-details
+        run: |
+          CLUSTER=$(aws ecs list-clusters \
+            --query "clusterArns[?contains(@, 'nginx-ecs-staging')]" \
+            --output text | head -n1)
+          SERVICE=$(aws ecs list-services --cluster $CLUSTER \
+            --query "serviceArns[0]" --output text)
+          
+          echo "cluster=$CLUSTER" >> $GITHUB_OUTPUT
+          echo "service=$SERVICE" >> $GITHUB_OUTPUT
+
+      - name: Force New Deployment
+        run: |
+          aws ecs update-service \
+            --cluster ${{ steps.ecs-details.outputs.cluster }} \
+            --service ${{ steps.ecs-details.outputs.service }} \
+            --force-new-deployment
+
+      - name: Wait for Service Stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ steps.ecs-details.outputs.cluster }} \
+            --services ${{ steps.ecs-details.outputs.service }}
+
+  health-check:
+    name: Health Check
+    runs-on: ubuntu-latest
+    needs: [terraform-apply]
+    if: ${{ !inputs.skip_terraform }}
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ALB URL
+        id: alb
+        run: |
+          ALB_URL=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?contains(LoadBalancerName, 'nginx-ecs-staging')].DNSName" \
+            --output text | head -n1)
+          echo "url=http://$ALB_URL" >> $GITHUB_OUTPUT
+
+      - name: Wait for Service
+        run: sleep 60
+
+      - name: Health Check
+        run: |
+          max_attempts=10
+          attempt=0
+          
+          while [ $attempt -lt $max_attempts ]; do
+            if curl -f -s -o /dev/null -w "%{http_code}" ${{ steps.alb.outputs.url }}; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            
+            echo "⏳ Attempt $((attempt + 1))/$max_attempts failed, retrying..."
+            attempt=$((attempt + 1))
+            sleep 10
+          done
+          
+          echo "❌ Health check failed after $max_attempts attempts"
+          exit 1
+
+      - name: Check Target Health
+        if: failure()
+        run: |
+          TG_ARN=$(aws elbv2 describe-target-groups \
+            --query "TargetGroups[?contains(TargetGroupName, 'nginx-ecs-staging')].TargetGroupArn" \
+            --output text)
+          
+          echo "Target Group Health:"
+          aws elbv2 describe-target-health --target-group-arn $TG_ARN
+
+  notify:
+    name: Notify Deployment
+    runs-on: ubuntu-latest
+    needs: [build-and-push, terraform-apply, health-check]
+    if: always()
+    steps:
+      - name: Deployment Summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tag:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build:** ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Terraform:** ${{ needs.terraform-apply.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Check:** ${{ needs.health-check.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Author:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
