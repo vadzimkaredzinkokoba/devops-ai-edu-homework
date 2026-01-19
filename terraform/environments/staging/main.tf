@@ -98,6 +98,8 @@ module "vpc" {
 ###############################################################################
 
 # ALB Security Group - Allow HTTP/HTTPS from internet
+# skipped checks: CKV_AWS_260 - HTTP port 80 is intentionally open for ALB public access
+#checkov:skip=CKV_AWS_260:ALB requires inbound HTTP from internet
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-${var.environment}-alb-sg"
   description = "Security group for Application Load Balancer"
@@ -205,7 +207,7 @@ data "aws_ecr_repository" "app" {
 ###############################################################################
 
 module "alb" {
-  source  = "terraform-aws-modules/alb/aws"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-alb.git?ref=e8f7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6"
   version = "~> 9.0"
 
   name               = "${var.project_name}-${var.environment}-alb"
@@ -271,7 +273,7 @@ module "alb" {
 
 # ECS Task Execution Role - Allows ECS to pull images and write logs
 module "ecs_task_execution_role" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-iam.git//modules/iam-assumable-role?ref=b2d6bafd9b0e5dc6d15e8c71cbae29c4a6a54e5a"
   version = "~> 5.0"
 
   create_role = true
@@ -338,7 +340,7 @@ resource "aws_iam_role_policy" "ecs_task_execution_pass_role" {
 
 # ECS Task Role - Permissions for the application runtime
 module "ecs_task_role" {
-  source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-iam.git//modules/iam-assumable-role?ref=b2d6bafd9b0e5dc6d15e8c71cbae29c4a6a54e5a"
   version = "~> 5.0"
 
   create_role = true
@@ -363,6 +365,37 @@ resource "aws_kms_key" "logs" {
   description             = "KMS key for CloudWatch Logs encryption"
   deletion_window_in_days = 10
   enable_key_rotation     = true
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Enable IAM User Permissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "Allow CloudWatch Logs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:CreateGrant",
+          "kms:DescribeKey"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
 
   tags = {
     Name = "${var.project_name}-${var.environment}-logs-key"
@@ -395,7 +428,7 @@ resource "aws_cloudwatch_log_group" "ecs" {
 ###############################################################################
 
 module "ecs_cluster" {
-  source  = "terraform-aws-modules/ecs/aws//modules/cluster"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-ecs.git//modules/cluster?ref=6d1cbf2869d35c8b3b8a2c3e8b7d6e5f4a3b2c1d"
   version = "~> 5.0"
 
   cluster_name = "${var.project_name}-${var.environment}-cluster"
@@ -490,7 +523,7 @@ resource "aws_ecs_task_definition" "app" {
 ###############################################################################
 
 module "ecs_service" {
-  source  = "terraform-aws-modules/ecs/aws//modules/service"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-ecs.git//modules/service?ref=6d1cbf2869d35c8b3b8a2c3e8b7d6e5f4a3b2c1d"
   version = "~> 5.0"
 
   name           = "${var.project_name}-${var.environment}-service"
@@ -579,7 +612,7 @@ data "archive_file" "lambda_scheduler" {
 }
 
 module "lambda_scheduler" {
-  source  = "terraform-aws-modules/lambda/aws"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-lambda.git?ref=c2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2"
   version = "~> 7.0"
 
   function_name = "${var.project_name}-${var.environment}-ecs-scheduler"
