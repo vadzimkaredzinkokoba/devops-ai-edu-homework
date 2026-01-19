@@ -19,6 +19,34 @@ variable "state_bucket_name" {
   }
 }
 
+variable "environment" {
+  description = "Environment name (e.g., staging, prod) used for shared resources like ECR"
+  type        = string
+  default     = "staging"
+
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be one of: dev, staging, prod."
+  }
+}
+
+variable "ecr_scan_on_push" {
+  description = "Enable image scanning on push to ECR"
+  type        = bool
+  default     = true
+}
+
+variable "ecr_image_count" {
+  description = "Number of images to retain in ECR"
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.ecr_image_count > 0 && var.ecr_image_count <= 1000
+    error_message = "ECR image count must be between 1 and 1000."
+  }
+}
+
 variable "project_name" {
   description = "Project name for tagging resources"
   type        = string

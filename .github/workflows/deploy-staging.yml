@@ -19,16 +19,42 @@ on:
 permissions:
   contents: read
   id-token: write
+  security-events: write
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  TF_VERSION: '1.9.0'
+  TF_VERSION: '1.13.4'
   ENVIRONMENT: staging
+  PROJECT_NAME: nginx-ecs-app
 
 jobs:
+  check-changes:
+    name: Check for relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      dockerfile: ${{ steps.filter.outputs.dockerfile }}
+      terraform: ${{ steps.filter.outputs.terraform }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changes
+        id: filter
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            dockerfile:
+              - 'Dockerfile'
+            terraform:
+              - 'terraform/**'
+
   build-and-push:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
+    needs: check-changes
+    if: needs.check-changes.outputs.dockerfile == 'true'
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
       image-digest: ${{ steps.build.outputs.digest }}
@@ -50,11 +76,36 @@ jobs:
       - name: Get ECR Repository
         id: ecr-repo
         run: |
+          REPO_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
           ECR_REPO=$(aws ecr describe-repositories \
-            --query "repositories[?contains(repositoryName, 'nginx-ecs-staging')].repositoryUri" \
-            --output text | head -n1)
+            --repository-names "$REPO_NAME" \
+            --query "repositories[0].repositoryUri" \
+            --output text)
+          if [ -z "$ECR_REPO" ]; then
+            echo "ECR repository '$REPO_NAME' not found" >&2
+            exit 1
+          fi
           echo "repository=$ECR_REPO" >> $GITHUB_OUTPUT
           echo "ECR Repository: $ECR_REPO"
+
+      - name: Check if image exists
+        id: check-image
+        run: |
+          REPO_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
+          IMAGE_TAG="${{ github.sha }}"
+          
+          # Check if image with this tag already exists
+          if aws ecr describe-images \
+            --repository-name "$REPO_NAME" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageTags' \
+            --output text 2>/dev/null | grep -q "$IMAGE_TAG"; then
+            echo "Image with tag $IMAGE_TAG already exists in ECR"
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Image with tag $IMAGE_TAG not found, will build and push"
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Docker meta
         id: meta
@@ -67,9 +118,11 @@ jobs:
             type=raw,value=latest
 
       - name: Set up Docker Buildx
+        if: steps.check-image.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v3
 
       - name: Cache Docker layers
+        if: steps.check-image.outputs.exists == 'false'
         uses: actions/cache@v4
         with:
           path: /tmp/.buildx-cache
@@ -78,6 +131,7 @@ jobs:
             ${{ runner.os }}-buildx-
 
       - name: Build and push Docker image
+        if: steps.check-image.outputs.exists == 'false'
         id: build
         uses: docker/build-push-action@v5
         with:
@@ -86,12 +140,13 @@ jobs:
           push: true
           tags: |
             ${{ steps.ecr-repo.outputs.repository }}:${{ github.sha }}
-            ${{ steps.ecr-repo.outputs.repository }}:staging-latest
+            ${{ steps.ecr-repo.outputs.repository }}:latest
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
           platforms: linux/amd64
 
       - name: Scan image with Trivy
+        if: steps.check-image.outputs.exists == 'false'
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ steps.ecr-repo.outputs.repository }}:${{ github.sha }}
@@ -101,12 +156,13 @@ jobs:
           exit-code: '0'
 
       - name: Upload Trivy results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && steps.check-image.outputs.exists == 'false'
         with:
           sarif_file: 'trivy-results.sarif'
 
       - name: Move cache
+        if: steps.check-image.outputs.exists == 'false'
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
@@ -114,7 +170,7 @@ jobs:
   terraform-apply:
     name: Apply Terraform
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [check-changes, build-and-push]
     if: ${{ !inputs.skip_terraform }}
     environment:
       name: staging
@@ -154,23 +210,21 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="use_lockfile=true"
 
-      - name: Update Image Tag
-        run: |
-          cd terraform/environments/${{ env.ENVIRONMENT }}
-          # Update terraform.tfvars with new image tag
-          sed -i 's/image_tag = .*/image_tag = "${{ github.sha }}"/' terraform.tfvars
-
       - name: Terraform Plan
         id: plan
         run: |
           cd terraform/environments/${{ env.ENVIRONMENT }}
-          terraform plan -out=tfplan
+          terraform plan \
+            -var="image_tag=${{ github.sha }}" \
+            -out=tfplan
 
       - name: Terraform Apply
         id: apply
         run: |
           cd terraform/environments/${{ env.ENVIRONMENT }}
-          terraform apply -auto-approve tfplan
+          terraform apply \
+            -var="image_tag=${{ github.sha }}" \
+            -auto-approve tfplan
 
       - name: Get Outputs
         id: outputs
@@ -191,43 +245,44 @@ jobs:
           name: terraform-outputs
           path: terraform/environments/${{ env.ENVIRONMENT }}/terraform-outputs.json
 
-  update-ecs-service:
-    name: Update ECS Service
-    runs-on: ubuntu-latest
-    needs: [build-and-push, terraform-apply]
-    if: ${{ inputs.skip_terraform }}
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
+  # update-ecs-service:
+  #     name: Update ECS Service
+  #     runs-on: ubuntu-latest
+  #     needs: [build-and-push, terraform-apply]
+  #     if: ${{ inputs.skip_terraform }}
+  #     steps:
+  #       - name: Configure AWS Credentials
+  #         uses: aws-actions/configure-aws-credentials@v4
+  #         with:
+  #           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  #           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  #           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Get ECS Service Details
-        id: ecs-details
-        run: |
-          CLUSTER=$(aws ecs list-clusters \
-            --query "clusterArns[?contains(@, 'nginx-ecs-staging')]" \
-            --output text | head -n1)
-          SERVICE=$(aws ecs list-services --cluster $CLUSTER \
-            --query "serviceArns[0]" --output text)
-          
-          echo "cluster=$CLUSTER" >> $GITHUB_OUTPUT
-          echo "service=$SERVICE" >> $GITHUB_OUTPUT
+  #       - name: Get ECS Service Details
+  #         id: ecs-details
+  #         run: |
+  #           CLUSTER=$(aws ecs list-clusters \
+  #             --query "clusterArns[?contains(@, 'nginx-ecs-staging')]" \
+  #             --output text | head -n1)
+  #           SERVICE=$(aws ecs list-services --cluster $CLUSTER \
+  #             --query "serviceArns[0]" --output text)
+        
+  #           echo "cluster=$CLUSTER" >> $GITHUB_OUTPUT
+  #           echo "service=$SERVICE" >> $GITHUB_OUTPUT
 
-      - name: Force New Deployment
-        run: |
-          aws ecs update-service \
-            --cluster ${{ steps.ecs-details.outputs.cluster }} \
-            --service ${{ steps.ecs-details.outputs.service }} \
-            --force-new-deployment
+  #       - name: Force New Deployment
+  #         run: |
+  #           aws ecs update-service \
+  #             --cluster ${{ steps.ecs-details.outputs.cluster }} \
+  #             --service ${{ steps.ecs-details.outputs.service }} \
+  #             --force-new-deployment
 
-      - name: Wait for Service Stability
-        run: |
-          aws ecs wait services-stable \
-            --cluster ${{ steps.ecs-details.outputs.cluster }} \
-            --services ${{ steps.ecs-details.outputs.service }}
+  #       - name: Wait for Service Stability
+  #         run: |
+  #           aws ecs wait services-stable \
+  #             --cluster ${{ steps.ecs-details.outputs.cluster }} \
+  #             --services ${{ steps.ecs-details.outputs.service }}
+
 
   health-check:
     name: Health Check
@@ -246,7 +301,7 @@ jobs:
         id: alb
         run: |
           ALB_URL=$(aws elbv2 describe-load-balancers \
-            --query "LoadBalancers[?contains(LoadBalancerName, 'nginx-ecs-staging')].DNSName" \
+            --query "LoadBalancers[?contains(LoadBalancerName, 'nginx-ecs-app-staging-alb')].DNSName" \
             --output text | head -n1)
           echo "url=http://$ALB_URL" >> $GITHUB_OUTPUT
 
@@ -276,7 +331,7 @@ jobs:
         if: failure()
         run: |
           TG_ARN=$(aws elbv2 describe-target-groups \
-            --query "TargetGroups[?contains(TargetGroupName, 'nginx-ecs-staging')].TargetGroupArn" \
+            --query "TargetGroups[?contains(TargetGroupName, 'nginx-ecs-app-staging-alb')].TargetGroupArn" \
             --output text)
           
           echo "Target Group Health:"
