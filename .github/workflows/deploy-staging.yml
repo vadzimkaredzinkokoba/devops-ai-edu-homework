@@ -189,6 +189,7 @@ jobs:
       - name: Update Image Tag
         run: |
           cd terraform/environments/${{ env.ENVIRONMENT }}
+          echo "Using image tag: ${{ github.sha }}"
           # Update terraform.tfvars with new image tag
           sed -i 's/image_tag = .*/image_tag = "${{ github.sha }}"/' terraform.tfvars
           cat terraform.tfvars | grep image_tag
