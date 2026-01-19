@@ -160,46 +160,11 @@ resource "aws_security_group" "ecs_tasks" {
 }
 
 ###############################################################################
-# ECR Repository
+# ECR Repository (provisioned in bootstrap)
 ###############################################################################
 
-resource "aws_ecr_repository" "app" {
-  name                 = "${var.project_name}-${var.environment}"
-  image_tag_mutability = "MUTABLE"
-
-  image_scanning_configuration {
-    scan_on_push = var.ecr_scan_on_push
-  }
-
-  encryption_configuration {
-    encryption_type = "AES256"
-  }
-
-  tags = {
-    Name = "${var.project_name}-${var.environment}"
-  }
-}
-
-# ECR Lifecycle Policy - Keep only recent images
-resource "aws_ecr_lifecycle_policy" "app" {
-  repository = aws_ecr_repository.app.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last ${var.ecr_image_count} images"
-        selection = {
-          tagStatus   = "any"
-          countType   = "imageCountMoreThan"
-          countNumber = var.ecr_image_count
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
+data "aws_ecr_repository" "app" {
+  name = "${var.project_name}-${var.environment}"
 }
 
 ###############################################################################
@@ -423,7 +388,7 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([
     {
       name      = var.container_name
-      image     = "${aws_ecr_repository.app.repository_url}:${var.image_tag}"
+      image     = "${data.aws_ecr_repository.app.repository_url}:${var.image_tag}"
       essential = true
 
       portMappings = [

@@ -38,3 +38,13 @@ output "backend_configuration" {
       -backend-config="use_lockfile=true"
   EOT
 }
+
+output "ecr_repository_name" {
+  description = "Name of the shared ECR repository"
+  value       = aws_ecr_repository.app.name
+}
+
+output "ecr_repository_url" {
+  description = "Repository URI for pushing images"
+  value       = aws_ecr_repository.app.repository_url
+}

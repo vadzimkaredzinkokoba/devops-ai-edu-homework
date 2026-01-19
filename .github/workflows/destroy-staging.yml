@@ -16,6 +16,7 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   TF_VERSION: '1.9.0'
   ENVIRONMENT: staging
+  PROJECT_NAME: nginx-ecs-app
 
 jobs:
   validate-input:
@@ -74,13 +75,12 @@ jobs:
       - name: Cleanup ECR Images
         continue-on-error: true
         run: |
-          REPO_NAME=$(aws ecr describe-repositories \
-            --query "repositories[?contains(repositoryName, 'nginx-ecs-staging')].repositoryName" \
-            --output text)
-          
-          if [ -n "$REPO_NAME" ]; then
+          REPO_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
+          if aws ecr describe-repositories --repository-names "$REPO_NAME" --query 'repositories[0].repositoryName' --output text >/dev/null 2>&1; then
             echo "Deleting ECR repository: $REPO_NAME"
-            aws ecr delete-repository --repository-name $REPO_NAME --force
+            aws ecr delete-repository --repository-name "$REPO_NAME" --force
+          else
+            echo "ECR repository $REPO_NAME not found, skipping"
           fi
 
       - name: Destruction Summary

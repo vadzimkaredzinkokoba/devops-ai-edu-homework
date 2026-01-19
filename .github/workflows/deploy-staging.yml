@@ -24,6 +24,7 @@ env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   TF_VERSION: '1.9.0'
   ENVIRONMENT: staging
+  PROJECT_NAME: nginx-ecs-app
 
 jobs:
   build-and-push:
@@ -50,9 +51,15 @@ jobs:
       - name: Get ECR Repository
         id: ecr-repo
         run: |
+          REPO_NAME="${PROJECT_NAME}-${ENVIRONMENT}"
           ECR_REPO=$(aws ecr describe-repositories \
-            --query "repositories[?contains(repositoryName, 'nginx-ecs-staging')].repositoryUri" \
-            --output text | head -n1)
+            --repository-names "$REPO_NAME" \
+            --query "repositories[0].repositoryUri" \
+            --output text)
+          if [ -z "$ECR_REPO" ]; then
+            echo "ECR repository '$REPO_NAME' not found" >&2
+            exit 1
+          fi
           echo "repository=$ECR_REPO" >> $GITHUB_OUTPUT
           echo "ECR Repository: $ECR_REPO"
 

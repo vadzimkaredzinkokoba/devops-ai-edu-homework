@@ -131,16 +131,6 @@ health_check_path = "/"
 enable_deletion_protection = false
 
 ###############################################################################
-# ECR Configuration
-###############################################################################
-
-# Scan images for vulnerabilities on push
-ecr_scan_on_push = true
-
-# Number of images to keep (older images are deleted)
-ecr_image_count = 10
-
-###############################################################################
 # CloudWatch Logs Configuration
 ###############################################################################
 

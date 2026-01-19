@@ -33,17 +33,17 @@ output "nat_gateway_ids" {
 
 output "ecr_repository_url" {
   description = "URL of the ECR repository"
-  value       = aws_ecr_repository.app.repository_url
+  value       = data.aws_ecr_repository.app.repository_url
 }
 
 output "ecr_repository_arn" {
   description = "ARN of the ECR repository"
-  value       = aws_ecr_repository.app.arn
+  value       = data.aws_ecr_repository.app.arn
 }
 
 output "ecr_registry_id" {
   description = "Registry ID of the ECR repository"
-  value       = aws_ecr_repository.app.registry_id
+  value       = data.aws_ecr_repository.app.registry_id
 }
 
 ###############################################################################
@@ -191,7 +191,7 @@ output "deployment_instructions" {
     ║                     Staging Environment Deployed Successfully               ║
     ╚════════════════════════════════════════════════════════════════════════════╝
     
-    📦 ECR Repository: ${aws_ecr_repository.app.repository_url}
+    📦 ECR Repository: ${data.aws_ecr_repository.app.repository_url}
     🌐 Application URL: http://${module.alb.dns_name}
     🔧 ECS Cluster: ${module.ecs_cluster.name}
     📊 ECS Service: ${module.ecs_service.name}
@@ -205,12 +205,12 @@ output "deployment_instructions" {
     2. Build and push Docker image:
        # For nginx example:
        docker pull nginx:latest
-       docker tag nginx:latest ${aws_ecr_repository.app.repository_url}:latest
-       docker push ${aws_ecr_repository.app.repository_url}:latest
+      docker tag nginx:latest ${data.aws_ecr_repository.app.repository_url}:latest
+      docker push ${data.aws_ecr_repository.app.repository_url}:latest
        
        # Or build your own:
-       docker build -t ${aws_ecr_repository.app.repository_url}:latest .
-       docker push ${aws_ecr_repository.app.repository_url}:latest
+      docker build -t ${data.aws_ecr_repository.app.repository_url}:latest .
+      docker push ${data.aws_ecr_repository.app.repository_url}:latest
     
     3. Force new deployment (after pushing image):
        aws ecs update-service \
