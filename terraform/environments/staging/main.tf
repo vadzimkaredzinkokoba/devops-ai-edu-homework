@@ -380,10 +380,10 @@ resource "aws_ecs_task_definition" "app" {
   execution_role_arn       = module.ecs_task_execution_role.iam_role_arn
   task_role_arn            = module.ecs_task_role.iam_role_arn
 
-  runtime_platform {
-    cpu_architecture        = "ARM64"
-    operating_system_family = "LINUX"
-  }
+# runtime_platform {
+#   cpu_architecture        = "ARM64"
+#   operating_system_family = "LINUX"
+# }
 
   container_definitions = jsonencode([
     {
