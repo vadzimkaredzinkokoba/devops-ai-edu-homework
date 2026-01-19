@@ -58,7 +58,6 @@ data "aws_availability_zones" "available" {
 
 module "vpc" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=d4034b4b5e1f0be6763a14a4f2d59b5c5e84c1f2"
-  version = "~> 5.0"
 
   name = "${var.project_name}-${var.environment}-vpc"
   cidr = var.vpc_cidr
@@ -208,7 +207,6 @@ data "aws_ecr_repository" "app" {
 
 module "alb" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-alb.git?ref=e8f7a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6"
-  version = "~> 9.0"
 
   name               = "${var.project_name}-${var.environment}-alb"
   load_balancer_type = "application"
@@ -274,7 +272,6 @@ module "alb" {
 # ECS Task Execution Role - Allows ECS to pull images and write logs
 module "ecs_task_execution_role" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-iam.git//modules/iam-assumable-role?ref=b2d6bafd9b0e5dc6d15e8c71cbae29c4a6a54e5a"
-  version = "~> 5.0"
 
   create_role = true
   role_name   = "${var.project_name}-${var.environment}-ecs-task-execution"
@@ -341,7 +338,6 @@ resource "aws_iam_role_policy" "ecs_task_execution_pass_role" {
 # ECS Task Role - Permissions for the application runtime
 module "ecs_task_role" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-iam.git//modules/iam-assumable-role?ref=b2d6bafd9b0e5dc6d15e8c71cbae29c4a6a54e5a"
-  version = "~> 5.0"
 
   create_role = true
   role_name   = "${var.project_name}-${var.environment}-ecs-task"
@@ -429,7 +425,6 @@ resource "aws_cloudwatch_log_group" "ecs" {
 
 module "ecs_cluster" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-ecs.git//modules/cluster?ref=6d1cbf2869d35c8b3b8a2c3e8b7d6e5f4a3b2c1d"
-  version = "~> 5.0"
 
   cluster_name = "${var.project_name}-${var.environment}-cluster"
 
@@ -524,7 +519,6 @@ resource "aws_ecs_task_definition" "app" {
 
 module "ecs_service" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-ecs.git//modules/service?ref=6d1cbf2869d35c8b3b8a2c3e8b7d6e5f4a3b2c1d"
-  version = "~> 5.0"
 
   name           = "${var.project_name}-${var.environment}-service"
   cluster_arn    = module.ecs_cluster.arn
@@ -613,7 +607,6 @@ data "archive_file" "lambda_scheduler" {
 
 module "lambda_scheduler" {
   source  = "git::https://github.com/terraform-aws-modules/terraform-aws-lambda.git?ref=c2d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2"
-  version = "~> 7.0"
 
   function_name = "${var.project_name}-${var.environment}-ecs-scheduler"
   description   = "Start/stop ECS services on schedule for cost optimization"
