@@ -109,10 +109,7 @@ terraform init \
 
 ## State Locking
 
-This configuration uses **S3 native locking** with `use_lockfile = true`:
-- Terraform 1.9+ supports built-in S3 state locking
-- DynamoDB is no longer required (deprecated approach)
-- Lock file is stored at `.tflock` next to the state file
+This configuration uses S3-native locking with `use_lockfile = true`; DynamoDB is not required for locking in this setup.
 
 ## Security Considerations
 
