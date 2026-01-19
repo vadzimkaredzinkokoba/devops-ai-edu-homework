@@ -57,7 +57,7 @@ data "aws_availability_zones" "available" {
 ###############################################################################
 
 module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
+  source  = "git::https://github.com/terraform-aws-modules/terraform-aws-vpc.git?ref=d4034b4b5e1f0be6763a14a4f2d59b5c5e84c1f2"
   version = "~> 5.0"
 
   name = "${var.project_name}-${var.environment}-vpc"
@@ -109,6 +109,7 @@ resource "aws_security_group" "alb" {
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
+    # Note: This is intentionally open for ALB to receive public traffic
   }
 
   ingress {
@@ -120,11 +121,27 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description      = "Allow HTTPS outbound"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description      = "Allow DNS outbound"
+    from_port        = 53
+    to_port          = 53
+    protocol         = "udp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description      = "Allow HTTP to ECS tasks"
+    from_port        = var.container_port
+    to_port          = var.container_port
+    protocol         = "tcp"
+    security_groups  = [aws_security_group.ecs_tasks.id]
   }
 
   tags = {
@@ -147,11 +164,27 @@ resource "aws_security_group" "ecs_tasks" {
   }
 
   egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    description      = "Allow HTTPS to ECR"
+    from_port        = 443
+    to_port          = 443
+    protocol         = "tcp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description      = "Allow DNS queries"
+    from_port        = 53
+    to_port          = 53
+    protocol         = "udp"
+    cidr_blocks      = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description      = "Allow NTP for time sync"
+    from_port        = 123
+    to_port          = 123
+    protocol         = "udp"
+    cidr_blocks      = ["0.0.0.0/0"]
   }
 
   tags = {
@@ -267,12 +300,18 @@ resource "aws_iam_role_policy" "ecs_task_execution_ecr" {
       {
         Effect = "Allow"
         Action = [
-          "ecr:GetAuthorizationToken",
+          "ecr:GetAuthorizationToken"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "ecr:BatchCheckLayerAvailability",
           "ecr:GetDownloadUrlForLayer",
           "ecr:BatchGetImage"
         ]
-        Resource = "*"
+        Resource = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/${var.project_name}-${var.environment}"
       }
     ]
   })
@@ -317,16 +356,38 @@ module "ecs_task_role" {
 }
 
 ###############################################################################
+# KMS Key for Logs Encryption
+###############################################################################
+
+resource "aws_kms_key" "logs" {
+  description             = "KMS key for CloudWatch Logs encryption"
+  deletion_window_in_days = 10
+  enable_key_rotation     = true
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-logs-key"
+  }
+}
+
+resource "aws_kms_alias" "logs" {
+  name          = "alias/${var.project_name}-${var.environment}-logs"
+  target_key_id = aws_kms_key.logs.key_id
+}
+
+###############################################################################
 # CloudWatch Log Group
 ###############################################################################
 
 resource "aws_cloudwatch_log_group" "ecs" {
   name              = "/ecs/${var.project_name}-${var.environment}"
-  retention_in_days = var.log_retention_days
+  retention_in_days = max(var.log_retention_days, 365)  # Enforce minimum 1 year retention
+  kms_key_id        = aws_kms_key.logs.arn
 
   tags = {
     Name = "${var.project_name}-${var.environment}-logs"
   }
+
+  depends_on = [aws_kms_alias.logs]
 }
 
 ###############################################################################
