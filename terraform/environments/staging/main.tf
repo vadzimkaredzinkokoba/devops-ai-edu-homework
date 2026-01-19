@@ -99,9 +99,9 @@ module "vpc" {
 
 # ALB Security Group - Allow HTTP/HTTPS from internet
 resource "aws_security_group" "alb" {
-  name_description = "${var.project_name}-${var.environment}-alb-sg"
-  description      = "Security group for Application Load Balancer"
-  vpc_id           = module.vpc.vpc_id
+  name        = "${var.project_name}-${var.environment}-alb-sg"
+  description = "Security group for Application Load Balancer"
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     description = "HTTP from internet"
@@ -134,9 +134,9 @@ resource "aws_security_group" "alb" {
 
 # ECS Tasks Security Group - Allow traffic from ALB only
 resource "aws_security_group" "ecs_tasks" {
-  name_description = "${var.project_name}-${var.environment}-ecs-tasks-sg"
-  description      = "Security group for ECS tasks"
-  vpc_id           = module.vpc.vpc_id
+  name        = "${var.project_name}-${var.environment}-ecs-tasks-sg"
+  description = "Security group for ECS tasks"
+  vpc_id      = module.vpc.vpc_id
 
   ingress {
     description     = "Allow traffic from ALB"
@@ -238,6 +238,7 @@ module "alb" {
       protocol                          = "HTTP"
       port                              = var.container_port
       target_type                       = "ip"
+      create_attachment                 = false
       deregistration_delay              = 30
       load_balancing_algorithm_type     = "least_outstanding_requests"
       load_balancing_cross_zone_enabled = true
@@ -277,6 +278,7 @@ module "ecs_task_execution_role" {
 
   create_role = true
   role_name   = "${var.project_name}-${var.environment}-ecs-task-execution"
+  role_requires_mfa = false
 
   trusted_role_services = ["ecs-tasks.amazonaws.com"]
 
@@ -311,6 +313,25 @@ resource "aws_iam_role_policy" "ecs_task_execution_ecr" {
   })
 }
 
+# Additional policy for passing the task role to ECS
+resource "aws_iam_role_policy" "ecs_task_execution_pass_role" {
+  name = "pass-role"
+  role = module.ecs_task_execution_role.iam_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = module.ecs_task_role.iam_role_arn
+      }
+    ]
+  })
+}
+
 # ECS Task Role - Permissions for the application runtime
 module "ecs_task_role" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role"
@@ -318,6 +339,7 @@ module "ecs_task_role" {
 
   create_role = true
   role_name   = "${var.project_name}-${var.environment}-ecs-task"
+  role_requires_mfa = false
 
   trusted_role_services = ["ecs-tasks.amazonaws.com"]
 
@@ -393,6 +415,11 @@ resource "aws_ecs_task_definition" "app" {
   execution_role_arn       = module.ecs_task_execution_role.iam_role_arn
   task_role_arn            = module.ecs_task_role.iam_role_arn
 
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
   container_definitions = jsonencode([
     {
       name      = var.container_name
@@ -446,7 +473,8 @@ module "ecs_service" {
   enable_execute_command = var.enable_ecs_exec
 
   # Task Definition
-  task_definition_arn = aws_ecs_task_definition.app.arn
+  create_task_definition = false
+  task_definition_arn    = aws_ecs_task_definition.app.arn
 
   # Capacity provider strategy (Fargate + Fargate Spot)
   capacity_provider_strategy = {
@@ -479,61 +507,37 @@ module "ecs_service" {
   health_check_grace_period_seconds  = 60
   force_new_deployment               = false
 
+  # Autoscaling
+  enable_autoscaling      = true
+  autoscaling_min_capacity = var.min_capacity
+  autoscaling_max_capacity = var.max_capacity
+  autoscaling_policies = {
+    cpu = {
+      policy_type = "TargetTrackingScaling"
+      target_tracking_scaling_policy_configuration = {
+        predefined_metric_specification = {
+          predefined_metric_type = "ECSServiceAverageCPUUtilization"
+        }
+        target_value       = var.cpu_target_value
+        scale_in_cooldown  = var.scale_in_cooldown
+        scale_out_cooldown = var.scale_out_cooldown
+      }
+    }
+    memory = {
+      policy_type = "TargetTrackingScaling"
+      target_tracking_scaling_policy_configuration = {
+        predefined_metric_specification = {
+          predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+        }
+        target_value       = var.memory_target_value
+        scale_in_cooldown  = var.scale_in_cooldown
+        scale_out_cooldown = var.scale_out_cooldown
+      }
+    }
+  }
+
   tags = {
     Name = "${var.project_name}-${var.environment}-service"
-  }
-}
-
-###############################################################################
-# Auto Scaling
-###############################################################################
-
-# Auto Scaling Target
-resource "aws_appautoscaling_target" "ecs" {
-  max_capacity       = var.max_capacity
-  min_capacity       = var.min_capacity
-  resource_id        = "service/${module.ecs_cluster.name}/${module.ecs_service.name}"
-  scalable_dimension = "ecs:service:DesiredCount"
-  service_namespace  = "ecs"
-
-  depends_on = [module.ecs_service]
-}
-
-# CPU-based Auto Scaling Policy
-resource "aws_appautoscaling_policy" "ecs_cpu" {
-  name               = "${var.project_name}-${var.environment}-cpu-scaling"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.ecs.resource_id
-  scalable_dimension = aws_appautoscaling_target.ecs.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs.service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ECSServiceAverageCPUUtilization"
-    }
-
-    target_value       = var.cpu_target_value
-    scale_in_cooldown  = var.scale_in_cooldown
-    scale_out_cooldown = var.scale_out_cooldown
-  }
-}
-
-# Memory-based Auto Scaling Policy
-resource "aws_appautoscaling_policy" "ecs_memory" {
-  name               = "${var.project_name}-${var.environment}-memory-scaling"
-  policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.ecs.resource_id
-  scalable_dimension = aws_appautoscaling_target.ecs.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs.service_namespace
-
-  target_tracking_scaling_policy_configuration {
-    predefined_metric_specification {
-      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
-    }
-
-    target_value       = var.memory_target_value
-    scale_in_cooldown  = var.scale_in_cooldown
-    scale_out_cooldown = var.scale_out_cooldown
   }
 }
 
@@ -558,6 +562,7 @@ module "lambda_scheduler" {
   runtime       = "python3.11"
   timeout       = 60
   memory_size   = 128
+  publish       = true
 
   create_package         = false
   local_existing_package = data.archive_file.lambda_scheduler.output_path
@@ -566,7 +571,6 @@ module "lambda_scheduler" {
     CLUSTER_NAME  = module.ecs_cluster.name
     SERVICE_NAME  = module.ecs_service.name
     DESIRED_COUNT = var.desired_count
-    AWS_REGION    = var.region
   }
 
   # IAM permissions for Lambda
@@ -580,7 +584,7 @@ module "lambda_scheduler" {
           "ecs:DescribeServices",
           "ecs:UpdateService"
         ]
-        Resource = module.ecs_service.arn
+        Resource = module.ecs_service.id
       },
       {
         Effect = "Allow"
