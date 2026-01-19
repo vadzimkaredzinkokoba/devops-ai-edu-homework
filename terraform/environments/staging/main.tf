@@ -138,14 +138,6 @@ resource "aws_security_group" "alb" {
     cidr_blocks      = ["0.0.0.0/0"]
   }
 
-  egress {
-    description      = "Allow HTTP to ECS tasks"
-    from_port        = var.container_port
-    to_port          = var.container_port
-    protocol         = "tcp"
-    security_groups  = [aws_security_group.ecs_tasks.id]
-  }
-
   tags = {
     Name = "${var.project_name}-${var.environment}-alb-sg"
   }
@@ -156,14 +148,6 @@ resource "aws_security_group" "ecs_tasks" {
   name        = "${var.project_name}-${var.environment}-ecs-tasks-sg"
   description = "Security group for ECS tasks"
   vpc_id      = module.vpc.vpc_id
-
-  ingress {
-    description     = "Allow traffic from ALB"
-    from_port       = var.container_port
-    to_port         = var.container_port
-    protocol        = "tcp"
-    security_groups = [aws_security_group.alb.id]
-  }
 
   egress {
     description      = "Allow HTTPS to ECR"
@@ -192,6 +176,28 @@ resource "aws_security_group" "ecs_tasks" {
   tags = {
     Name = "${var.project_name}-${var.environment}-ecs-tasks-sg"
   }
+}
+
+# Allow ALB to communicate with ECS tasks (break circular dependency)
+resource "aws_security_group_rule" "alb_to_ecs" {
+  type                     = "egress"
+  from_port                = var.container_port
+  to_port                  = var.container_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.ecs_tasks.id
+  security_group_id        = aws_security_group.alb.id
+  description              = "Allow ALB to send traffic to ECS tasks"
+}
+
+# Allow ECS tasks to receive traffic from ALB (break circular dependency)
+resource "aws_security_group_rule" "ecs_from_alb" {
+  type                     = "ingress"
+  from_port                = var.container_port
+  to_port                  = var.container_port
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.alb.id
+  security_group_id        = aws_security_group.ecs_tasks.id
+  description              = "Allow ECS tasks to receive traffic from ALB"
 }
 
 ###############################################################################
